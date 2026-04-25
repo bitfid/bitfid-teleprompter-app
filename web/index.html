@@ -32,6 +32,13 @@ Enable Voice Follow to let the app listen through the microphone and keep the cu
           <button id="samplePrompt" type="button">Sample</button>
         </div>
 
+        <div class="prompt-actions" aria-label="Prompt playback controls">
+          <button id="playPause" type="button">Scroll</button>
+          <button id="backLine" type="button">Back</button>
+          <button id="nextLine" type="button">Next</button>
+          <button id="fullscreen" type="button">Full</button>
+        </div>
+
         <div class="controls" aria-label="Teleprompter controls">
           <label>
             Size
@@ -59,17 +66,24 @@ Enable Voice Follow to let the app listen through the microphone and keep the cu
         </div>
 
         <p id="status" class="status" role="status">Ready.</p>
+
+        <section class="read-notes" aria-label="Read text notes">
+          <div class="read-notes-header">
+            <h2>Read Notes</h2>
+            <button id="clearReadNotes" type="button">Clear</button>
+          </div>
+          <p id="readAccuracy" class="status">No speech captured yet.</p>
+          <label for="readNotes">Spoken transcript</label>
+          <textarea id="readNotes" readonly aria-label="Spoken transcript"></textarea>
+          <label for="localSummary">Local read summary</label>
+          <textarea id="localSummary" readonly aria-label="Local read summary"></textarea>
+        </section>
       </section>
 
       <section class="stage" aria-label="Teleprompter screen">
-        <div class="stage-bar">
-          <button id="playPause" type="button">Scroll</button>
-          <button id="backLine" type="button">Back</button>
-          <button id="nextLine" type="button">Next</button>
-          <button id="fullscreen" type="button">Full</button>
-        </div>
         <div id="promptViewport" class="prompt-viewport" tabindex="0">
           <div class="safe-band" aria-hidden="true"></div>
+          <div id="pauseWatermark" class="pause-watermark" aria-hidden="true">Paused</div>
           <article id="promptText" class="prompt-text"></article>
         </div>
       </section>
