@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Bitfid Teleprompter App</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="app">
+      <section class="editor" aria-label="Prompt editor">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <div>
+            <h1>Bitfid Teleprompter</h1>
+            <p>Local test version</p>
+          </div>
+        </div>
+
+        <label for="scriptInput">Script</label>
+        <textarea id="scriptInput" spellcheck="true">Welcome to Bitfid Teleprompter.
+
+Paste or write your script here.
+
+Press Start Prompt when you are ready.
+
+Enable Voice Follow to let the app listen through the microphone and keep the current line centered while you read.</textarea>
+
+        <div class="toolbar">
+          <button id="loadPrompt" type="button">Start Prompt</button>
+          <button id="resetPrompt" type="button">Reset</button>
+          <button id="samplePrompt" type="button">Sample</button>
+        </div>
+
+        <div class="controls" aria-label="Teleprompter controls">
+          <label>
+            Size
+            <input id="fontSize" type="range" min="32" max="96" value="54">
+          </label>
+          <label>
+            Speed
+            <input id="speed" type="range" min="10" max="120" value="42">
+          </label>
+          <label>
+            Line gap
+            <input id="lineGap" type="range" min="1.15" max="1.9" step="0.05" value="1.45">
+          </label>
+        </div>
+
+        <div class="toggle-row">
+          <label class="switch">
+            <input id="voiceFollow" type="checkbox">
+            <span>Voice Follow</span>
+          </label>
+          <label class="switch">
+            <input id="mirrorMode" type="checkbox">
+            <span>Mirror</span>
+          </label>
+        </div>
+
+        <p id="status" class="status" role="status">Ready.</p>
+      </section>
+
+      <section class="stage" aria-label="Teleprompter screen">
+        <div class="stage-bar">
+          <button id="playPause" type="button">Scroll</button>
+          <button id="backLine" type="button">Back</button>
+          <button id="nextLine" type="button">Next</button>
+          <button id="fullscreen" type="button">Full</button>
+        </div>
+        <div id="promptViewport" class="prompt-viewport" tabindex="0">
+          <div class="safe-band" aria-hidden="true"></div>
+          <article id="promptText" class="prompt-text"></article>
+        </div>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
