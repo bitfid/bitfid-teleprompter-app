@@ -92,10 +92,6 @@ function lineMatchForSpeech(spoken, index) {
 
 function renderPrompt() {
   els.promptText.innerHTML = "";
-  state.readLines.clear();
-  state.spokenSegments.clear();
-  state.lastMatchedLine = 0;
-  updateReadNotes();
   state.lines.forEach((line, index) => {
     const p = document.createElement("p");
     p.className = "prompt-line";
@@ -104,6 +100,15 @@ function renderPrompt() {
     els.promptText.appendChild(p);
   });
   setActiveLine(0, false);
+}
+
+function resetReadTracking() {
+  // Editing the script invalidates the previous read-through analysis.
+  // Keep this reset in one place so manual reload and live preview behave the same.
+  state.readLines.clear();
+  state.spokenSegments.clear();
+  state.lastMatchedLine = 0;
+  updateReadNotes();
 }
 
 function setActiveLine(index, shouldScroll = true) {
@@ -128,12 +133,40 @@ function setStatus(message) {
 function loadPrompt() {
   state.lines = splitLines(els.scriptInput.value);
   if (!state.lines.length) {
+    els.promptText.innerHTML = "";
+    resetReadTracking();
     setStatus("Add a script first.");
     return;
   }
+  resetReadTracking();
   renderPrompt();
   setStatus(`${state.lines.length} lines loaded.`);
   els.viewport.focus();
+}
+
+function syncPromptFromScript() {
+  const previousLine = state.activeLine;
+  const nextLines = splitLines(els.scriptInput.value);
+
+  // Live editing changes the source text under the matcher, so stop active
+  // playback modes before repainting the prompt to avoid stale line tracking.
+  if (state.voiceFollow) {
+    setVoiceFollowMode(false);
+    state.recognition?.stop();
+  }
+  stopScroll();
+  state.lines = nextLines;
+  resetReadTracking();
+
+  if (!state.lines.length) {
+    els.promptText.innerHTML = "";
+    setStatus("Add a script first.");
+    return;
+  }
+
+  renderPrompt();
+  setActiveLine(Math.min(previousLine, state.lines.length - 1), false);
+  setStatus(`${state.lines.length} lines live.`);
 }
 
 function startScroll() {
@@ -392,6 +425,7 @@ function handlePromptKeys(event) {
 }
 
 els.loadPrompt.addEventListener("click", loadPrompt);
+els.scriptInput.addEventListener("input", syncPromptFromScript);
 els.resetPrompt.addEventListener("click", () => {
   stopScroll();
   setActiveLine(0);
@@ -400,7 +434,7 @@ els.resetPrompt.addEventListener("click", () => {
 });
 els.samplePrompt.addEventListener("click", () => {
   els.scriptInput.value = sampleScript;
-  loadPrompt();
+  syncPromptFromScript();
 });
 els.playPause.addEventListener("click", toggleScroll);
 els.backLine.addEventListener("click", () => setActiveLine(state.activeLine - 1));
