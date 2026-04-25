@@ -15,8 +15,13 @@ const state = {
   activeLine: 0,
   scrolling: false,
   voiceFollow: false,
+  voiceFollowPaused: false,
   recognition: null,
-  scrollTimer: null,
+  scrollFrame: null,
+  lastScrollTime: 0,
+  readLines: new Set(),
+  spokenSegments: new Map(),
+  lastMatchedLine: 0,
 };
 
 const els = {
@@ -35,12 +40,19 @@ const els = {
   nextLine: document.querySelector("#nextLine"),
   fullscreen: document.querySelector("#fullscreen"),
   viewport: document.querySelector("#promptViewport"),
+  pauseWatermark: document.querySelector("#pauseWatermark"),
   promptText: document.querySelector("#promptText"),
+  clearReadNotes: document.querySelector("#clearReadNotes"),
+  readAccuracy: document.querySelector("#readAccuracy"),
+  readNotes: document.querySelector("#readNotes"),
+  localSummary: document.querySelector("#localSummary"),
+  app: document.querySelector(".app"),
 };
 
 function splitLines(text) {
   return text
-    .split(/\n+/)
+    .replace(/\n{2,}/g, "\n")
+    .split(/(?<=[.!?])\s+|\n+|;\s+/)
     .map((line) => line.trim())
     .filter(Boolean);
 }
@@ -62,8 +74,8 @@ function scoreLine(spoken, line) {
 }
 
 function bestLineForSpeech(spoken) {
-  const start = Math.max(0, state.activeLine - 2);
-  const end = Math.min(state.lines.length, state.activeLine + 5);
+  const start = state.activeLine;
+  const end = Math.min(state.lines.length, state.activeLine + 7);
   let best = { index: state.activeLine, score: 0 };
 
   for (let index = start; index < end; index += 1) {
@@ -71,11 +83,19 @@ function bestLineForSpeech(spoken) {
     if (score > best.score) best = { index, score };
   }
 
-  return best.score >= 0.18 ? best.index : state.activeLine;
+  return best.score >= 0.18 ? Math.max(best.index, state.activeLine) : state.activeLine;
+}
+
+function lineMatchForSpeech(spoken, index) {
+  return scoreLine(spoken, state.lines[index] || "");
 }
 
 function renderPrompt() {
   els.promptText.innerHTML = "";
+  state.readLines.clear();
+  state.spokenSegments.clear();
+  state.lastMatchedLine = 0;
+  updateReadNotes();
   state.lines.forEach((line, index) => {
     const p = document.createElement("p");
     p.className = "prompt-line";
@@ -92,6 +112,7 @@ function setActiveLine(index, shouldScroll = true) {
     const lineIndex = Number(line.dataset.index);
     line.classList.toggle("active", lineIndex === state.activeLine);
     line.classList.toggle("past", lineIndex < state.activeLine);
+    line.classList.toggle("read", state.readLines.has(lineIndex));
   });
 
   if (shouldScroll) {
@@ -118,25 +139,45 @@ function loadPrompt() {
 function startScroll() {
   if (state.scrolling) return;
   state.scrolling = true;
+  state.lastScrollTime = performance.now();
   els.playPause.textContent = "Pause";
   els.playPause.setAttribute("aria-pressed", "true");
-  const tick = () => {
-    const pxPerTick = Number(els.speed.value) / 14;
-    els.viewport.scrollBy({ top: pxPerTick, behavior: "auto" });
-    state.scrollTimer = window.setTimeout(tick, 80);
-  };
-  tick();
+  els.viewport.classList.add("is-scrolling");
+  state.scrollFrame = window.requestAnimationFrame(scrollStep);
 }
 
 function stopScroll() {
   state.scrolling = false;
   els.playPause.textContent = "Scroll";
   els.playPause.setAttribute("aria-pressed", "false");
-  window.clearTimeout(state.scrollTimer);
+  els.viewport.classList.remove("is-scrolling");
+  window.cancelAnimationFrame(state.scrollFrame);
+}
+
+function scrollStep(timestamp) {
+  if (!state.scrolling) return;
+  const elapsed = Math.min(48, timestamp - state.lastScrollTime);
+  state.lastScrollTime = timestamp;
+  const pxPerSecond = Number(els.speed.value);
+  els.viewport.scrollTop += (pxPerSecond * elapsed) / 1000;
+  state.scrollFrame = window.requestAnimationFrame(scrollStep);
 }
 
 function toggleScroll() {
+  if (state.voiceFollow) return;
   state.scrolling ? stopScroll() : startScroll();
+}
+
+function setVoiceFollowMode(isEnabled) {
+  state.voiceFollow = isEnabled;
+  state.voiceFollowPaused = false;
+  els.app.classList.toggle("voice-following", isEnabled);
+  els.playPause.hidden = isEnabled;
+  els.backLine.hidden = isEnabled;
+  els.nextLine.hidden = isEnabled;
+  els.fullscreen.hidden = false;
+  els.fullscreen.textContent = "Full";
+  els.voiceFollow.checked = isEnabled;
 }
 
 function setupSpeechRecognition() {
@@ -153,24 +194,30 @@ function setupSpeechRecognition() {
   recognition.lang = navigator.language || "en-US";
 
   recognition.onresult = (event) => {
+    if (state.voiceFollowPaused) return;
     const latest = Array.from(event.results)
       .slice(-2)
       .map((result) => result[0]?.transcript || "")
       .join(" ");
     const matched = bestLineForSpeech(latest);
+    const confidence = lineMatchForSpeech(latest, matched);
     if (matched !== state.activeLine) {
       const previousLine = state.activeLine;
       setActiveLine(matched);
       const distance = Math.abs(matched - previousLine);
       els.speed.value = String(Math.max(20, Math.min(120, Number(els.speed.value) + distance * 4)));
     }
+    if (confidence >= 0.7) {
+      markReadLine(matched, confidence);
+    }
+    rememberSpeech(event);
     setStatus(`Listening: ${latest.trim() || "speak when ready"}`);
   };
 
   recognition.onerror = (event) => {
     setStatus(`Voice Follow stopped: ${event.error}`);
     els.voiceFollow.checked = false;
-    state.voiceFollow = false;
+    setVoiceFollowMode(false);
   };
 
   recognition.onend = () => {
@@ -180,25 +227,168 @@ function setupSpeechRecognition() {
   return recognition;
 }
 
+function markReadLine(index) {
+  if (!state.lines[index] || index < state.lastMatchedLine) return;
+  state.lastMatchedLine = Math.max(state.lastMatchedLine, index);
+  if (state.readLines.has(index)) return;
+  state.readLines.add(index);
+  updateReadNotes();
+  document
+    .querySelector(`.prompt-line[data-index="${index}"]`)
+    ?.classList.add("read");
+}
+
+function rememberSpeech(event) {
+  for (let index = 0; index < event.results.length; index += 1) {
+    const result = event.results[index];
+    if (!result.isFinal) continue;
+    const transcript = result[0]?.transcript?.trim();
+    if (transcript) state.spokenSegments.set(index, transcript);
+  }
+  updateReadNotes();
+}
+
+function transcriptText() {
+  return [...state.spokenSegments.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map((entry) => entry[1])
+    .join(" ")
+    .trim();
+}
+
+function spokenSentences() {
+  return splitLines(transcriptText());
+}
+
+function bestScriptScoreForSpokenSentence(sentence) {
+  return state.lines.reduce(
+    (best, line, index) => {
+      const score = scoreLine(sentence, line);
+      return score > best.score ? { index, score } : best;
+    },
+    { index: -1, score: 0 },
+  );
+}
+
+function localReadAnalysis() {
+  const readSentences = [...state.readLines]
+    .sort((a, b) => a - b)
+    .map((index) => state.lines[index]);
+  const readCount = readSentences.length;
+  const totalCount = state.lines.length;
+  const coverage = totalCount ? Math.round((readCount / totalCount) * 100) : 0;
+  const missed = state.lines.filter((_, index) => !state.readLines.has(index));
+  const additions = spokenSentences()
+    .map((sentence) => ({ sentence, match: bestScriptScoreForSpokenSentence(sentence) }))
+    .filter((item) => item.match.score < 0.45)
+    .map((item) => item.sentence);
+  const matchedScores = [...state.readLines].map((index) => {
+    const spoken = spokenSentences().find((sentence) => bestScriptScoreForSpokenSentence(sentence).index === index);
+    return spoken ? bestScriptScoreForSpokenSentence(spoken).score : 0.7;
+  });
+  const accuracy = matchedScores.length
+    ? Math.round((matchedScores.reduce((total, score) => total + score, 0) / matchedScores.length) * 100)
+    : 0;
+
+  return {
+    readCount,
+    totalCount,
+    coverage,
+    accuracy,
+    missed,
+    additions,
+  };
+}
+
+function renderLocalSummary(analysis) {
+  const missedText = analysis.missed.length
+    ? analysis.missed.map((line) => `- ${line}`).join("\n")
+    : "- None detected.";
+  const addedText = analysis.additions.length
+    ? analysis.additions.map((line) => `- ${line}`).join("\n")
+    : "- None detected.";
+
+  return [
+    `Accuracy: ${analysis.accuracy}%`,
+    `Coverage: ${analysis.readCount} of ${analysis.totalCount} script sentences (${analysis.coverage}%).`,
+    "",
+    "Missed from script:",
+    missedText,
+    "",
+    "Added while speaking:",
+    addedText,
+  ].join("\n");
+}
+
+function updateReadNotes() {
+  const transcript = transcriptText();
+  const analysis = localReadAnalysis();
+  els.readAccuracy.textContent = `${analysis.readCount} of ${analysis.totalCount} sentences matched at 70% confidence. Accuracy ${analysis.accuracy}%.`;
+  els.readNotes.value = transcript;
+  els.localSummary.value = renderLocalSummary(analysis);
+}
+
+function clearReadNotes() {
+  state.readLines.clear();
+  state.spokenSegments.clear();
+  state.lastMatchedLine = state.activeLine;
+  updateReadNotes();
+  document.querySelectorAll(".prompt-line.read").forEach((line) => line.classList.remove("read"));
+  setStatus("Read notes cleared.");
+}
+
 function toggleVoiceFollow() {
   if (els.voiceFollow.checked) {
     if (!state.lines.length) loadPrompt();
     state.recognition = state.recognition || setupSpeechRecognition();
     if (!state.recognition) return;
-    state.voiceFollow = true;
-    state.recognition.start();
     stopScroll();
+    setVoiceFollowMode(true);
+    state.recognition.start();
     setStatus("Voice Follow is listening.");
   } else {
-    state.voiceFollow = false;
+    setVoiceFollowMode(false);
     state.recognition?.stop();
     setStatus("Voice Follow off.");
   }
 }
 
+function toggleVoiceFollowPause() {
+  if (!state.voiceFollow) return;
+  state.voiceFollowPaused = !state.voiceFollowPaused;
+  els.fullscreen.textContent = state.voiceFollowPaused ? "Full (Paused)" : "Full";
+  setStatus(state.voiceFollowPaused ? "Voice Follow paused." : "Voice Follow resumed.");
+}
+
 function updateTypography() {
   els.promptText.style.fontSize = `${els.fontSize.value}px`;
   els.promptText.style.lineHeight = els.lineGap.value;
+}
+
+function isTypingTarget(target) {
+  return ["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(target?.tagName) || target?.isContentEditable;
+}
+
+function handlePromptKeys(event) {
+  if (event.code === "Space" && !isTypingTarget(event.target)) {
+    event.preventDefault();
+    if (state.voiceFollow) {
+      toggleVoiceFollowPause();
+      return;
+    }
+    toggleScroll();
+  }
+
+  if (!state.voiceFollow && (document.fullscreenElement === els.viewport || document.activeElement === els.viewport)) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveLine(state.activeLine + 1);
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveLine(state.activeLine - 1);
+    }
+  }
 }
 
 els.loadPrompt.addEventListener("click", loadPrompt);
@@ -215,6 +405,7 @@ els.samplePrompt.addEventListener("click", () => {
 els.playPause.addEventListener("click", toggleScroll);
 els.backLine.addEventListener("click", () => setActiveLine(state.activeLine - 1));
 els.nextLine.addEventListener("click", () => setActiveLine(state.activeLine + 1));
+els.clearReadNotes.addEventListener("click", clearReadNotes);
 els.fullscreen.addEventListener("click", () => {
   if (document.fullscreenElement) {
     document.exitFullscreen();
@@ -228,14 +419,7 @@ els.mirrorMode.addEventListener("change", () => {
 });
 els.fontSize.addEventListener("input", updateTypography);
 els.lineGap.addEventListener("input", updateTypography);
-els.viewport.addEventListener("keydown", (event) => {
-  if (event.code === "Space") {
-    event.preventDefault();
-    toggleScroll();
-  }
-  if (event.key === "ArrowDown") setActiveLine(state.activeLine + 1);
-  if (event.key === "ArrowUp") setActiveLine(state.activeLine - 1);
-});
+document.addEventListener("keydown", handlePromptKeys);
 
 updateTypography();
 loadPrompt();
